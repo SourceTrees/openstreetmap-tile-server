@@ -1,8 +1,11 @@
 #!/bin/bash
 
+DEFAULT_CUSTOM_PSQL_CONF="postgresql.custom.conf.tmpl"
+
 function createPostgresConfig() {
-  cp /etc/postgresql/12/main/postgresql.custom.conf.tmpl /etc/postgresql/12/main/conf.d/postgresql.custom.conf
-  sudo -u postgres echo "autovacuum = $AUTOVACUUM" >> /etc/postgresql/12/main/conf.d/postgresql.custom.conf
+  #cp /etc/postgresql/12/main/postgresql.custom.conf.tmpl /etc/postgresql/12/main/conf.d/postgresql.custom.conf
+  cp /etc/postgresql/12/main/"${2:-$DEFAULT_CUSTOM_PSQL_CONF}" /etc/postgresql/12/main/conf.d/postgresql.custom.conf
+  #sudo -u postgres echo "autovacuum = $AUTOVACUUM" >> /etc/postgresql/12/main/conf.d/postgresql.custom.conf
   cat /etc/postgresql/12/main/conf.d/postgresql.custom.conf
 }
 
@@ -10,10 +13,10 @@ function setPostgresPassword() {
     sudo -u postgres psql -c "ALTER USER renderer PASSWORD '${PGPASSWORD:-renderer}'"
 }
 
-if [ "$#" -ne 1 ]; then
-    echo "usage: <import|run>"
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] ; then
+    echo "usage: <import|run> postgresConfFile "
     echo "commands:"
-    echo "    import: Set up the database and import /data.osm.pbf"
+    echo "    import: Set up the database and import /mapdata/data.osm.pbf"
     echo "    run: Runs Apache and renderd to serve tiles at /tile/{z}/{x}/{y}.png"
     echo "environment variables:"
     echo "    THREADS: defines number of threads used for importing / tile rendering"
@@ -31,7 +34,7 @@ if [ "$1" = "import" ]; then
     fi
 
     # Initialize PostgreSQL
-    createPostgresConfig
+    createPostgresConfig "$@"
     service postgresql start
     sudo -u postgres createuser renderer
     sudo -u postgres createdb -E UTF8 -O renderer gis
@@ -42,41 +45,47 @@ if [ "$1" = "import" ]; then
     setPostgresPassword
 
     # Download Luxembourg as sample if no data is provided
-    if [ ! -f /data.osm.pbf ] && [ -z "$DOWNLOAD_PBF" ]; then
-        echo "WARNING: No import file at /data.osm.pbf, so importing Luxembourg as example..."
+    if [ ! -f /mapdata/data.osm.pbf ] && [ -z "$DOWNLOAD_PBF" ]; then
+        echo "WARNING: No import file at /mapdata/data.osm.pbf, so importing Luxembourg as example..."
         DOWNLOAD_PBF="https://download.geofabrik.de/europe/luxembourg-latest.osm.pbf"
         DOWNLOAD_POLY="https://download.geofabrik.de/europe/luxembourg.poly"
     fi
 
-    if [ -n "$DOWNLOAD_PBF" ]; then
+    if [ ! -f /mapdata/data.osm.pbf ] && [ -n "$DOWNLOAD_PBF" ]; then
         echo "INFO: Download PBF file: $DOWNLOAD_PBF"
-        wget $WGET_ARGS "$DOWNLOAD_PBF" -O /data.osm.pbf
+        wget "$WGET_ARGS" "$DOWNLOAD_PBF" -O /mapdata/data.osm.pbf
         if [ -n "$DOWNLOAD_POLY" ]; then
             echo "INFO: Download PBF-POLY file: $DOWNLOAD_POLY"
-            wget $WGET_ARGS "$DOWNLOAD_POLY" -O /data.poly
+            wget "$WGET_ARGS" "$DOWNLOAD_POLY" -O /mapdata/data.poly
         fi
     fi
 
     if [ "$UPDATES" = "enabled" ]; then
         # determine and set osmosis_replication_timestamp (for consecutive updates)
-        osmium fileinfo /data.osm.pbf > /var/lib/mod_tile/data.osm.pbf.info
-        osmium fileinfo /data.osm.pbf | grep 'osmosis_replication_timestamp=' | cut -b35-44 > /var/lib/mod_tile/replication_timestamp.txt
+        osmium fileinfo /mapdata/data.osm.pbf > /var/lib/mod_tile/data.osm.pbf.info
+        osmium fileinfo /mapdata/data.osm.pbf | grep 'osmosis_replication_timestamp=' | cut -b35-44 > /var/lib/mod_tile/replication_timestamp.txt
         REPLICATION_TIMESTAMP=$(cat /var/lib/mod_tile/replication_timestamp.txt)
 
         # initial setup of osmosis workspace (for consecutive updates)
-        sudo -u renderer openstreetmap-tiles-update-expire $REPLICATION_TIMESTAMP
+        sudo -u renderer openstreetmap-tiles-update-expire "$REPLICATION_TIMESTAMP"
     fi
 
     # copy polygon file if available
-    if [ -f /data.poly ]; then
-        sudo -u renderer cp /data.poly /var/lib/mod_tile/data.poly
+    if [ -f /mapdata/data.poly ]; then
+        sudo -u renderer cp /mapdata/data.poly /var/lib/mod_tile/data.poly
     fi
 
+    sudo -u renderer osm2pgsql --version
+
     # Import data
-    sudo -u renderer osm2pgsql -d gis --create --slim -G --hstore --tag-transform-script /home/renderer/src/openstreetmap-carto/openstreetmap-carto.lua --number-processes ${THREADS:-4} -S /home/renderer/src/openstreetmap-carto/openstreetmap-carto.style /data.osm.pbf ${OSM2PGSQL_EXTRA_ARGS}
+    #sudo -u renderer osm2pgsql -d gis --create --slim -G --hstore --tag-transform-script /home/renderer/src/openstreetmap-carto/openstreetmap-carto.lua --number-processes "${THREADS:-4}" -S /home/renderer/src/openstreetmap-carto/openstreetmap-carto.style /mapdata/data.osm.pbf "${OSM2PGSQL_EXTRA_ARGS}"
+    sudo -u renderer osm2pgsql -d gis --create -G --hstore --tag-transform-script /home/renderer/src/openstreetmap-carto/openstreetmap-carto.lua --number-processes ${THREADS:-4} -S /home/renderer/src/openstreetmap-carto/openstreetmap-carto.style /mapdata/data.osm.pbf ${OSM2PGSQL_EXTRA_ARGS}
 
     # Create indexes
     sudo -u postgres psql -d gis -f /home/renderer/src/openstreetmap-carto/indexes.sql
+
+    # Custom indexes
+    sudo -u postgres psql -d gis -f /index-custom.sql
 
     #Import external data
     sudo chown -R renderer: /home/renderer/src
@@ -103,7 +112,7 @@ if [ "$1" = "run" ]; then
     fi
 
     # Initialize PostgreSQL and Apache
-    createPostgresConfig
+    createPostgresConfig "$@"
     service postgresql start
     service apache2 restart
     setPostgresPassword

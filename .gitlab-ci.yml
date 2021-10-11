@@ -1,0 +1,51 @@
+variables:
+  FF_USE_FASTZIP: "true" # enable fastzip - a faster zip implementation that also supports level configuration.
+  ARTIFACT_COMPRESSION_LEVEL: default
+  CACHE_COMPRESSION_LEVEL: default
+  TRANSFER_METER_FREQUENCY: 5s # will display transfer progress every 5 seconds for artifacts and remote caches.
+  SONAR_USER_HOME: ${CI_PROJECT_DIR}/.sonar  # Defines the location of the analysis task cache
+  GIT_DEPTH: 0  # Tells git to fetch all the branches of the project, required by the analysis task
+  CLI_VERSION: latest
+  DOCKER_BUILDKIT: 1 # With BuildKit, you don't need to pull the remote images before building since it caches each build layer in your image registry. Then, when you build the image, each layer is downloaded as needed during the build.
+
+#-----------------------------------------------------------------------------------------------------------------------
+stages:
+  - Dockerimage
+
+
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Dockerimage
+#-----------------------------------------------------------------------------------------------------------------------
+.docker-build-script:
+  image: docker:20.10.7-git
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - ls -l
+    - |
+      if [[ "$CI_COMMIT_TAG" == "" ]]; then
+        tag="sha-${CI_COMMIT_SHORT_SHA}"
+      else
+        tag="$CI_COMMIT_TAG"
+      fi
+    - echo current tag ${tag}
+    - CI_SOURCE_BRANCH=$(git for-each-ref | grep $CI_COMMIT_SHA | grep origin | sed "s/.*\///" | tr '[:upper:]' '[:lower:]')
+    - echo CI_SOURCE_BRANCH $CI_SOURCE_BRANCH
+    - REGISTRY_IMAGE_BASE="$CI_REGISTRY_IMAGE/$CI_SOURCE_BRANCH/$IMG_NAME"
+    - FINAL_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE/$CI_SOURCE_BRANCH/$IMG_NAME:${tag}"
+    - echo "FINAL_REGISTRY_IMAGE=$FINAL_REGISTRY_IMAGE" >> dockerimage.env
+    - echo current FINAL_REGISTRY_IMAGE ${FINAL_REGISTRY_IMAGE}
+    - docker build --pull -f $DOCKER_FILE -t "$FINAL_REGISTRY_IMAGE" -t "$REGISTRY_IMAGE_BASE" --cache-from "$REGISTRY_IMAGE_BASE"  --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - docker push "$REGISTRY_IMAGE_BASE" --all-tags
+
+#-----------------------------------------------------------------------------------------------------------------------
+docker-build-osm:
+  #-----------------------------------------------------------------------------------------------------------------------
+  stage: Dockerimage
+  extends: .docker-build-script
+  variables:
+    IMG_NAME: "openstreetmap-tile-server-openkonsequenz"
+    DOCKER_FILE: "Dockerfile"

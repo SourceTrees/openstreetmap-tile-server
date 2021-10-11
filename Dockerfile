@@ -8,7 +8,8 @@ RUN apt-get update \
  g++ \
  make \
  tar \
- wget
+ wget \
+ ca-certificates
 
 ###########################################################################################################
 
@@ -42,13 +43,18 @@ RUN apt-get install -y --no-install-recommends \
  libproj-dev \
  lua5.3 \
  liblua5.3-dev \
+ # Lib Needed for WITH_LUAJIT=ON build flag:
+ libluajit-5.1-dev \
+ #luajit \
  pandoc
 RUN cd ~ \
 && git clone -b master --single-branch https://github.com/openstreetmap/osm2pgsql.git --depth 1 \
 && cd osm2pgsql \
 && mkdir build \
 && cd build \
-&& cmake .. \
+# Luajit on:
+&& cmake -D WITH_LUAJIT=ON .. \
+#&& cmake .. \
 && make -j $(nproc) \
 && checkinstall --pkgversion="1" --install=no --default make install
 
@@ -116,6 +122,7 @@ RUN apt-get update \
  gdal-bin \
  liblua5.3-dev \
  lua5.3 \
+ libluajit-5.1-dev \
  mapnik-utils \
  osmium-tool \
  osmosis \
@@ -204,6 +211,13 @@ COPY --from=compiler-stylesheet /root/openstreetmap-carto /home/renderer/src/ope
 
 # Install helper script
 COPY --from=compiler-helper-script /home/renderer/src/regional /home/renderer/src/regional
+
+# Copy custom indexex.sql
+COPY index-custom.sql /
+
+# Copy render_list_geo.pl
+COPY render_list_geo.pl /
+RUN chmod +x /render_list_geo.pl
 
 # Start running
 COPY run.sh /
