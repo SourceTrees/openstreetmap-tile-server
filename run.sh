@@ -27,6 +27,13 @@ fi
 set -x
 
 if [ "$1" = "import" ]; then
+
+    # Exit if data was already imported (kubernetes)
+    if [ -f /var/lib/mod_tile/planet-import-complete ]; then
+        echo "Data was already imported"
+        exit 0
+    fi
+
     # Ensure that database directory is in right state
     chown postgres:postgres -R /var/lib/postgresql
     if [ ! -f /var/lib/postgresql/12/main/PG_VERSION ]; then
